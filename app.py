@@ -25,7 +25,16 @@ from simulator import simulator
 from mqtt_gateway import mqtt_gateway
 
 # Setup Flask & SocketIO
-FRONTEND_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "frontend")
+# Detect FRONTEND_DIR dynamically (supports nested backend/frontend or flat root deployment)
+curr_dir = os.path.dirname(os.path.abspath(__file__))
+parent_dir = os.path.dirname(curr_dir)
+if os.path.exists(os.path.join(parent_dir, "frontend")):
+    FRONTEND_DIR = os.path.join(parent_dir, "frontend")
+elif os.path.exists(os.path.join(curr_dir, "frontend")):
+    FRONTEND_DIR = os.path.join(curr_dir, "frontend")
+else:
+    FRONTEND_DIR = curr_dir
+
 app = Flask(__name__, static_folder=FRONTEND_DIR)
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'powerplant-live-monitoring-secret-key-2026')
 
@@ -66,11 +75,39 @@ ws_thread.start()
 # --- FRONTEND STATIC DELIVERY ---
 @app.route("/")
 def index():
+    for candidate in [
+        os.path.join(FRONTEND_DIR, "index.html"),
+        os.path.join(os.path.dirname(__file__), "index.html")
+    ]:
+        if os.path.exists(candidate):
+            return send_from_directory(os.path.dirname(candidate), "index.html")
     return send_from_directory(FRONTEND_DIR, "index.html")
+
+@app.route("/js/App.js")
+def serve_app_js():
+    for candidate in [
+        os.path.join(FRONTEND_DIR, "js", "App.js"),
+        os.path.join(os.path.dirname(__file__), "App.js")
+    ]:
+        if os.path.exists(candidate):
+            return send_from_directory(os.path.dirname(candidate), os.path.basename(candidate))
+    return send_from_directory(FRONTEND_DIR, "App.js")
+
+@app.route("/css/styles.css")
+def serve_styles_css():
+    for candidate in [
+        os.path.join(FRONTEND_DIR, "css", "styles.css"),
+        os.path.join(os.path.dirname(__file__), "styles.css")
+    ]:
+        if os.path.exists(candidate):
+            return send_from_directory(os.path.dirname(candidate), os.path.basename(candidate))
+    return send_from_directory(FRONTEND_DIR, "styles.css")
 
 @app.route("/<path:path>")
 def serve_static(path):
-    return send_from_directory(FRONTEND_DIR, path)
+    if os.path.exists(os.path.join(FRONTEND_DIR, path)):
+        return send_from_directory(FRONTEND_DIR, path)
+    return send_from_directory(os.path.dirname(__file__), path)
 
 # --- REST APIS ---
 
