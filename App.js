@@ -12,6 +12,39 @@ function App() {
     const [simulationMode, setSimulationMode] = useState('NORMAL');
     const [activeAlertsCount, setActiveAlertsCount] = useState(0);
 
+    // Employee Authentication State (Stored in localStorage for session persistence)
+    const [currentUser, setCurrentUser] = useState(() => {
+        try {
+            const saved = localStorage.getItem('powerplant_employee_session');
+            return saved ? JSON.parse(saved) : null;
+        } catch (e) {
+            return null;
+        }
+    });
+
+    const handleLoginSuccess = (userData) => {
+        setCurrentUser(userData);
+        try {
+            localStorage.setItem('powerplant_employee_session', JSON.stringify(userData));
+        } catch (e) {}
+    };
+
+    const handleLogout = async () => {
+        try {
+            if (currentUser?.token) {
+                await fetch('/api/auth/logout', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ token: currentUser.token })
+                });
+            }
+        } catch (e) {}
+        setCurrentUser(null);
+        try {
+            localStorage.removeItem('powerplant_employee_session');
+        } catch (e) {}
+    };
+
     // Socket.IO Ref
     const socketRef = useRef(null);
 
@@ -77,10 +110,20 @@ function App() {
         };
     }, []);
 
+    // If not authenticated, display the Secure Employee Login Screen
+    if (!currentUser) {
+        return <EmployeeLoginScreen onLoginSuccess={handleLoginSuccess} systemTime={systemTime} />;
+    }
+
     return (
         <div className="flex h-screen overflow-hidden bg-slate-950 font-sans text-slate-100">
             {/* Sidebar Navigation */}
-            <Sidebar activePage={activePage} setActivePage={setActivePage} activeAlertsCount={activeAlertsCount} />
+            <Sidebar 
+                activePage={activePage} 
+                setActivePage={setActivePage} 
+                activeAlertsCount={activeAlertsCount} 
+                currentUser={currentUser}
+            />
 
             {/* Main Content Area */}
             <div className="flex flex-col flex-1 overflow-hidden">
@@ -90,6 +133,8 @@ function App() {
                     connected={connected} 
                     simulationMode={simulationMode}
                     telemetry={telemetry}
+                    currentUser={currentUser}
+                    onLogout={handleLogout}
                 />
 
                 {/* Sub-Header SCADA Telemetry Stream Status */}
@@ -112,10 +157,27 @@ function App() {
                     {activePage === 'dashboard' && <DashboardPage telemetry={telemetry} setActivePage={setActivePage} />}
                     {activePage === 'plant-overview' && <PlantOverviewPage telemetry={telemetry} />}
                     {activePage === 'sensors' && <SensorMonitoringPage telemetry={telemetry} />}
-                    {activePage === 'equipment' && <EquipmentMonitoringPage telemetry={telemetry} />}
-                    {activePage === 'alerts' && <AlertsPage />}
+                    {activePage === 'equipment' && (
+                        <EquipmentMonitoringPage 
+                            telemetry={telemetry} 
+                            userRole={currentUser.role}
+                            userToken={currentUser.token}
+                        />
+                    )}
+                    {activePage === 'alerts' && (
+                        <AlertsPage 
+                            userRole={currentUser.role}
+                            userToken={currentUser.token}
+                        />
+                    )}
                     {activePage === 'historical' && <HistoricalAnalysisPage />}
                     {activePage === 'thirty-day' && <ThirtyDayPerformancePage />}
+                    {activePage === 'employees' && currentUser.role === 'Admin' && (
+                        <EmployeeManagementPage 
+                            userToken={currentUser.token} 
+                            currentUser={currentUser}
+                        />
+                    )}
                 </main>
             </div>
         </div>
@@ -125,7 +187,7 @@ function App() {
 // ==============================================================================
 // COMPONENT: SIDEBAR
 // ==============================================================================
-function Sidebar({ activePage, setActivePage, activeAlertsCount }) {
+function Sidebar({ activePage, setActivePage, activeAlertsCount, currentUser }) {
     const navItems = [
         { id: 'dashboard', label: 'Live Dashboard', icon: 'fa-gauge-high' },
         { id: 'plant-overview', label: 'Plant Overview', icon: 'fa-industry' },
@@ -135,6 +197,10 @@ function Sidebar({ activePage, setActivePage, activeAlertsCount }) {
         { id: 'historical', label: 'Historical Analysis', icon: 'fa-chart-line' },
         { id: 'thirty-day', label: '30-Day Performance', icon: 'fa-calendar-days' },
     ];
+
+    if (currentUser && currentUser.role === 'Admin') {
+        navItems.push({ id: 'employees', label: 'Employee Directory', icon: 'fa-users-gear' });
+    }
 
     return (
         <aside className="w-64 bg-slate-900 border-r border-slate-800 flex flex-col justify-between shrink-0">
@@ -179,13 +245,37 @@ function Sidebar({ activePage, setActivePage, activeAlertsCount }) {
                 </nav>
             </div>
 
-            {/* Bottom Status Box */}
-            <div className="p-4 border-t border-slate-800 m-3 rounded-xl bg-slate-950/60 border border-slate-800/80">
-                <div className="text-[11px] text-slate-400 uppercase font-bold tracking-wider">Unit Capacity</div>
-                <div className="text-lg font-black text-white mt-0.5">500.0 <span className="text-xs font-normal text-slate-400">MW</span></div>
-                <div className="text-[10px] text-slate-500 mt-1 flex items-center gap-1.5">
-                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>
-                    Grid Synchronized (50 Hz)
+            {/* Bottom Status & Profile Area */}
+            <div className="space-y-2 p-3">
+                {/* Current Employee Badge */}
+                {currentUser && (
+                    <div className="p-3 rounded-xl bg-slate-950/80 border border-slate-800/80 flex items-center gap-2.5">
+                        <div className={`w-8 h-8 rounded-lg flex items-center justify-center text-xs shrink-0 ${
+                            currentUser.role === 'Admin' ? 'bg-rose-500/20 text-rose-400 border border-rose-500/40' :
+                            currentUser.role === 'Operator' ? 'bg-sky-500/20 text-sky-400 border border-sky-500/40' :
+                            'bg-amber-500/20 text-amber-400 border border-amber-500/40'
+                        }`}>
+                            <i className={currentUser.role === 'Admin' ? 'fa-solid fa-user-shield' : currentUser.role === 'Operator' ? 'fa-solid fa-user-gear' : 'fa-solid fa-user'}></i>
+                        </div>
+                        <div className="truncate flex-1">
+                            <div className="text-xs font-bold text-slate-200 truncate">{currentUser.name}</div>
+                            <div className="text-[10px] text-slate-400 font-mono">
+                                {currentUser.employee_id} &bull; <span className={`font-semibold ${
+                                    currentUser.role === 'Admin' ? 'text-rose-400' : currentUser.role === 'Operator' ? 'text-sky-400' : 'text-amber-400'
+                                }`}>{currentUser.role}</span>
+                            </div>
+                        </div>
+                    </div>
+                )}
+
+                {/* Bottom Unit Capacity Card */}
+                <div className="p-4 rounded-xl bg-slate-950/60 border border-slate-800/80">
+                    <div className="text-[11px] text-slate-400 uppercase font-bold tracking-wider">Unit Capacity</div>
+                    <div className="text-lg font-black text-white mt-0.5">500.0 <span className="text-xs font-normal text-slate-400">MW</span></div>
+                    <div className="text-[10px] text-slate-500 mt-1 flex items-center gap-1.5">
+                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>
+                        Grid Synchronized (50 Hz)
+                    </div>
                 </div>
             </div>
         </aside>
@@ -195,9 +285,15 @@ function Sidebar({ activePage, setActivePage, activeAlertsCount }) {
 // ==============================================================================
 // COMPONENT: TOP NAVBAR
 // ==============================================================================
-function TopNavbar({ systemTime, connected, simulationMode, telemetry }) {
+function TopNavbar({ systemTime, connected, simulationMode, telemetry, currentUser, onLogout }) {
     const powerMw = telemetry?.kpis?.power_output_mw?.current || 485.4;
     const efficiency = telemetry?.kpis?.plant_efficiency_pct?.current || 41.2;
+
+    const roleBadgeClass = currentUser?.role === 'Admin' 
+        ? 'bg-rose-500/15 border-rose-500/40 text-rose-300' 
+        : currentUser?.role === 'Operator' 
+        ? 'bg-sky-500/15 border-sky-500/40 text-sky-300' 
+        : 'bg-amber-500/15 border-amber-500/40 text-amber-300';
 
     return (
         <header className="h-16 bg-slate-900/90 backdrop-blur border-b border-slate-800 px-6 flex items-center justify-between shrink-0">
@@ -211,9 +307,9 @@ function TopNavbar({ systemTime, connected, simulationMode, telemetry }) {
                 </span>
             </div>
 
-            <div className="flex items-center gap-4">
+            <div className="flex items-center gap-3">
                 {/* Live Output Meter */}
-                <div className="hidden md:flex items-center gap-3 bg-slate-950 px-3.5 py-1.5 rounded-lg border border-slate-800 text-xs font-mono">
+                <div className="hidden xl:flex items-center gap-3 bg-slate-950 px-3.5 py-1.5 rounded-lg border border-slate-800 text-xs font-mono">
                     <span className="text-slate-400">GEN:</span>
                     <span className="text-sky-400 font-bold">{powerMw.toFixed(1)} MW</span>
                     <span className="text-slate-600">|</span>
@@ -230,12 +326,224 @@ function TopNavbar({ systemTime, connected, simulationMode, telemetry }) {
                 </div>
 
                 {/* Clock */}
-                <div className="text-xs font-mono font-bold text-slate-400 bg-slate-950 px-3 py-1.5 rounded-lg border border-slate-800">
+                <div className="hidden md:flex text-xs font-mono font-bold text-slate-400 bg-slate-950 px-3 py-1.5 rounded-lg border border-slate-800 items-center">
                     <i className="fa-regular fa-clock text-slate-500 mr-1.5"></i>
                     {systemTime}
                 </div>
+
+                {/* Authenticated Employee Pill & Logout Button */}
+                {currentUser && (
+                    <div className="flex items-center gap-2 pl-2 border-l border-slate-800">
+                        <div className="hidden sm:flex items-center gap-2 px-2.5 py-1 rounded-lg bg-slate-950 border border-slate-800 text-xs">
+                            <span className="font-mono text-slate-400 text-[11px]">{currentUser.employee_id}</span>
+                            <span className="text-slate-200 font-semibold">{currentUser.name}</span>
+                            <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold border ${roleBadgeClass}`}>
+                                {currentUser.role}
+                            </span>
+                        </div>
+                        <button
+                            onClick={onLogout}
+                            title="Sign out of Power Plant DCS"
+                            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/30 text-xs font-semibold transition"
+                        >
+                            <i className="fa-solid fa-right-from-bracket"></i>
+                            <span className="hidden sm:inline">Logout</span>
+                        </button>
+                    </div>
+                )}
             </div>
         </header>
+    );
+}
+
+// ==============================================================================
+// COMPONENT: SECURE EMPLOYEE LOGIN SCREEN
+// ==============================================================================
+function EmployeeLoginScreen({ onLoginSuccess, systemTime }) {
+    const [employeeId, setEmployeeId] = useState('');
+    const [password, setPassword] = useState('');
+    const [showPassword, setShowPassword] = useState(false);
+    const [isLoading, setIsLoading] = useState(false);
+    const [errorMessage, setErrorMessage] = useState('');
+
+    const handleSubmit = async (e) => {
+        e.preventDefault();
+        setErrorMessage('');
+        if (!employeeId.trim() || !password) {
+            setErrorMessage('Access Denied: Please enter Employee ID and Password.');
+            return;
+        }
+
+        setIsLoading(true);
+        try {
+            const res = await fetch('/api/auth/login', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    employee_id: employeeId.trim(),
+                    password: password
+                })
+            });
+
+            const data = await res.json();
+            if (res.ok && data.success) {
+                onLoginSuccess(data.user);
+            } else {
+                setErrorMessage(data.error || 'Access Denied: Unauthorized Personnel or Invalid Credentials.');
+            }
+        } catch (err) {
+            setErrorMessage('Access Denied: DCS Server connection error. Please try again.');
+        } finally {
+            setIsLoading(false);
+        }
+    };
+
+    return (
+        <div className="min-h-screen bg-slate-950 flex flex-col justify-between text-slate-100 font-sans selection:bg-sky-500 selection:text-white relative overflow-hidden">
+            {/* Background SCADA Grid & Glow */}
+            <div className="absolute inset-0 bg-[radial-gradient(#1e293b_1px,transparent_1px)] [background-size:24px_24px] opacity-40 pointer-events-none"></div>
+            <div className="absolute top-1/4 left-1/2 -translate-x-1/2 -translate-y-1/2 w-96 h-96 bg-sky-500/10 rounded-full blur-3xl pointer-events-none"></div>
+            <div className="absolute bottom-10 right-10 w-80 h-80 bg-blue-600/5 rounded-full blur-3xl pointer-events-none"></div>
+
+            {/* Top Security Status Bar */}
+            <header className="px-6 py-4 flex items-center justify-between border-b border-slate-800/80 bg-slate-900/60 backdrop-blur z-10">
+                <div className="flex items-center gap-3">
+                    <div className="w-8 h-8 rounded-lg bg-sky-500/20 border border-sky-500/40 flex items-center justify-center text-sky-400">
+                        <i className="fa-solid fa-shield-halved text-sm"></i>
+                    </div>
+                    <div>
+                        <div className="text-xs font-bold tracking-wider text-slate-200 uppercase font-mono">DCS GATEWAY &bull; SATPURA SUPER THERMAL POWER STATION</div>
+                        <div className="text-[10px] text-slate-400">500 MW Unit #4 &bull; SCADA Subsystem Security Boundary</div>
+                    </div>
+                </div>
+                <div className="hidden sm:flex items-center gap-4 text-xs font-mono">
+                    <span className="flex items-center gap-2 text-emerald-400">
+                        <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping"></span>
+                        SCADA SECURE
+                    </span>
+                    <span className="text-slate-600">|</span>
+                    <span className="text-slate-400"><i className="fa-regular fa-clock mr-1"></i>{systemTime}</span>
+                </div>
+            </header>
+
+            {/* Center Login Form */}
+            <main className="flex-1 flex items-center justify-center p-6 z-10">
+                <div className="w-full max-w-md">
+                    {/* Plant Card Header */}
+                    <div className="text-center mb-6">
+                        <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-gradient-to-tr from-sky-500 to-blue-600 text-white shadow-xl shadow-sky-500/20 mb-3 border border-sky-400/30">
+                            <i className="fa-solid fa-bolt text-2xl"></i>
+                        </div>
+                        <h1 className="text-2xl font-extrabold text-white tracking-tight">
+                            PowerPlant<span className="text-sky-400">IQ</span>
+                        </h1>
+                        <p className="text-xs text-slate-400 font-medium mt-1 uppercase tracking-wider font-mono">
+                            Authorized Personnel Only &bull; Access Control
+                        </p>
+                    </div>
+
+                    {/* Login Card */}
+                    <div className="scada-card p-8 shadow-2xl border border-slate-800 backdrop-blur-xl bg-slate-900/90 relative">
+                        <div className="flex items-center justify-between pb-4 mb-5 border-b border-slate-800">
+                            <div>
+                                <h2 className="text-sm font-bold text-slate-200 uppercase tracking-wider">Employee Authentication</h2>
+                                <p className="text-[11px] text-slate-400">Synchronized via plant <code className="text-sky-400 font-mono">employees.xlsx</code></p>
+                            </div>
+                            <span className="px-2 py-0.5 rounded text-[10px] font-mono bg-sky-500/10 border border-sky-500/30 text-sky-400">
+                                RBAC v2.4
+                            </span>
+                        </div>
+
+                        {/* Error Message Box */}
+                        {errorMessage && (
+                            <div className="mb-5 p-3 rounded-xl bg-rose-950/60 border border-rose-500/50 text-rose-300 text-xs flex items-start gap-2.5">
+                                <i className="fa-solid fa-triangle-exclamation text-rose-400 mt-0.5 shrink-0"></i>
+                                <div className="leading-tight">
+                                    <strong className="block font-bold">ACCESS DENIED</strong>
+                                    <span>{errorMessage}</span>
+                                </div>
+                            </div>
+                        )}
+
+                        <form onSubmit={handleSubmit} className="space-y-4">
+                            <div>
+                                <label className="block text-xs font-bold uppercase tracking-wider text-slate-300 mb-1.5">
+                                    Employee ID
+                                </label>
+                                <div className="relative">
+                                    <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-500 text-sm">
+                                        <i className="fa-solid fa-id-card-clip"></i>
+                                    </div>
+                                    <input
+                                        type="text"
+                                        value={employeeId}
+                                        onChange={(e) => setEmployeeId(e.target.value.toUpperCase())}
+                                        placeholder="e.g. EMP-1001"
+                                        required
+                                        className="w-full bg-slate-950 border border-slate-700 focus:border-sky-500 focus:ring-1 focus:ring-sky-500 rounded-xl pl-10 pr-3.5 py-2.5 text-sm font-mono text-white placeholder-slate-500 outline-none transition"
+                                    />
+                                </div>
+                            </div>
+
+                            <div>
+                                <label className="block text-xs font-bold uppercase tracking-wider text-slate-300 mb-1.5">
+                                    Security Password
+                                </label>
+                                <div className="relative">
+                                    <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-500 text-sm">
+                                        <i className="fa-solid fa-lock"></i>
+                                    </div>
+                                    <input
+                                        type={showPassword ? 'text' : 'password'}
+                                        value={password}
+                                        onChange={(e) => setPassword(e.target.value)}
+                                        placeholder="••••••••••••"
+                                        required
+                                        className="w-full bg-slate-950 border border-slate-700 focus:border-sky-500 focus:ring-1 focus:ring-sky-500 rounded-xl pl-10 pr-10 py-2.5 text-sm text-white placeholder-slate-500 outline-none transition"
+                                    />
+                                    <button
+                                        type="button"
+                                        onClick={() => setShowPassword(!showPassword)}
+                                        className="absolute inset-y-0 right-0 pr-3 flex items-center text-slate-500 hover:text-slate-300 text-xs"
+                                    >
+                                        <i className={`fa-solid ${showPassword ? 'fa-eye-slash' : 'fa-eye'}`}></i>
+                                    </button>
+                                </div>
+                            </div>
+
+                            <button
+                                type="submit"
+                                disabled={isLoading}
+                                className="w-full mt-2 py-3 px-4 rounded-xl font-bold text-sm bg-gradient-to-r from-sky-500 to-blue-600 hover:from-sky-400 hover:to-blue-500 text-white shadow-lg shadow-sky-500/25 active:scale-[0.99] transition flex items-center justify-center gap-2 disabled:opacity-50"
+                            >
+                                {isLoading ? (
+                                    <>
+                                        <i className="fa-solid fa-circle-notch fa-spin"></i>
+                                        <span>Verifying Credentials...</span>
+                                    </>
+                                ) : (
+                                    <>
+                                        <i className="fa-solid fa-right-to-bracket"></i>
+                                        <span>Authenticate & Access DCS</span>
+                                    </>
+                                )}
+                            </button>
+                        </form>
+
+                        {/* Security Notice */}
+                        <div className="mt-5 pt-4 border-t border-slate-800 text-[11px] text-slate-500 text-center leading-relaxed">
+                            <i className="fa-solid fa-circle-exclamation text-amber-500 mr-1"></i>
+                            Notice: Public registration and account creation are strictly prohibited. Contact Plant IT Admin for credentials.
+                        </div>
+                    </div>
+                </div>
+            </main>
+
+            {/* Footer */}
+            <footer className="px-6 py-3 border-t border-slate-800/60 bg-slate-900/40 text-center text-[11px] text-slate-500 font-mono">
+                Satpura Super Thermal Power Station &bull; ISO/IEC 27001 Certified SCADA Access Controller &bull; 2026
+            </footer>
+        </div>
     );
 }
 
@@ -817,7 +1125,8 @@ function SensorMonitoringPage({ telemetry }) {
 // ==============================================================================
 // PAGE 4: EQUIPMENT & 12 BURNER CONTROLS PAGE
 // ==============================================================================
-function EquipmentMonitoringPage({ telemetry }) {
+function EquipmentMonitoringPage({ telemetry, userRole, userToken }) {
+    const isViewer = userRole === 'Viewer';
     const [equipment, setEquipment] = useState([]);
     const [burners, setBurners] = useState([]);
     const [burnersAutoMode, setBurnersAutoMode] = useState(true);
@@ -846,17 +1155,29 @@ function EquipmentMonitoringPage({ telemetry }) {
 
     // Toggle individual burner ON / OFF
     const handleToggleBurner = async (burnerId, currentStatus) => {
+        if (isViewer) {
+            setStatusMsg('Access Denied: Viewer accounts are restricted to read-only monitoring.');
+            setTimeout(() => setStatusMsg(''), 3000);
+            return;
+        }
         const newStatus = currentStatus === 'ON' ? 'OFF' : 'ON';
         try {
             const res = await fetch('/api/burners/toggle', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: { 
+                    'Content-Type': 'application/json',
+                    'Authorization': userToken ? `Bearer ${userToken}` : ''
+                },
                 body: JSON.stringify({ burner_id: burnerId, status: newStatus })
             });
             if (res.ok) {
                 setStatusMsg(`Burner #${burnerId} turned ${newStatus}`);
                 setTimeout(() => setStatusMsg(''), 3000);
                 loadEquipmentAndBurners();
+            } else {
+                const errData = await res.json().catch(() => ({}));
+                setStatusMsg(`Command Rejected: ${errData.error || 'Access Denied'}`);
+                setTimeout(() => setStatusMsg(''), 3500);
             }
         } catch (e) {
             console.error(e);
@@ -865,11 +1186,19 @@ function EquipmentMonitoringPage({ telemetry }) {
 
     // Toggle Master Burners Mode (AUTO vs MANUAL)
     const handleToggleBurnersMode = async () => {
+        if (isViewer) {
+            setStatusMsg('Access Denied: Viewer accounts cannot modify burner governor modes.');
+            setTimeout(() => setStatusMsg(''), 3000);
+            return;
+        }
         const newMode = !burnersAutoMode;
         try {
             const res = await fetch('/api/burners/mode', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: { 
+                    'Content-Type': 'application/json',
+                    'Authorization': userToken ? `Bearer ${userToken}` : ''
+                },
                 body: JSON.stringify({ is_auto: newMode })
             });
             if (res.ok) {
@@ -884,6 +1213,11 @@ function EquipmentMonitoringPage({ telemetry }) {
 
     // Toggle Equipment Running / Stopped or Mode (AUTO / MANUAL)
     const handleEquipmentAction = async (eqId, currentStatus, currentMode, actionType) => {
+        if (isViewer) {
+            setStatusMsg('Access Denied: Viewer accounts cannot operate plant machinery.');
+            setTimeout(() => setStatusMsg(''), 3000);
+            return;
+        }
         const payload = { equipment_id: eqId };
         if (actionType === 'status') {
             payload.status = currentStatus === 'RUNNING' ? 'STOPPED' : 'RUNNING';
@@ -894,7 +1228,10 @@ function EquipmentMonitoringPage({ telemetry }) {
         try {
             const res = await fetch('/api/equipment/toggle', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: { 
+                    'Content-Type': 'application/json',
+                    'Authorization': userToken ? `Bearer ${userToken}` : ''
+                },
                 body: JSON.stringify(payload)
             });
             if (res.ok) {
@@ -909,10 +1246,18 @@ function EquipmentMonitoringPage({ telemetry }) {
 
     // Quick All Burners ON/OFF
     const handleSetAllBurners = async (targetStatus) => {
+        if (isViewer) {
+            setStatusMsg('Access Denied: Viewer role is restricted to read-only monitoring.');
+            setTimeout(() => setStatusMsg(''), 3000);
+            return;
+        }
         for (let i = 1; i <= 12; i++) {
             await fetch('/api/burners/toggle', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: { 
+                    'Content-Type': 'application/json',
+                    'Authorization': userToken ? `Bearer ${userToken}` : ''
+                },
                 body: JSON.stringify({ burner_id: i, status: targetStatus })
             });
         }
@@ -927,6 +1272,17 @@ function EquipmentMonitoringPage({ telemetry }) {
 
     return (
         <div className="space-y-8">
+            {/* Viewer Security Restriction Alert */}
+            {isViewer && (
+                <div className="p-4 rounded-xl bg-amber-500/10 border border-amber-500/40 text-amber-300 text-xs flex items-center gap-3">
+                    <i className="fa-solid fa-lock text-base text-amber-400"></i>
+                    <div>
+                        <strong className="block font-bold uppercase tracking-wider">VIEW-ONLY ACCESS &bull; RESTRICTED SUPERVISORY CONTROLS</strong>
+                        <span>Machinery start/stop, burner actuation, and governor mode toggles are locked for Viewer accounts. Log in with Operator or Admin credentials for active plant control.</span>
+                    </div>
+                </div>
+            )}
+
             {/* Status Message Notification Toast */}
             {statusMsg && (
                 <div className="p-3 rounded-xl bg-sky-950 border border-sky-500 text-sky-300 text-xs font-mono flex items-center gap-2">
@@ -961,10 +1317,12 @@ function EquipmentMonitoringPage({ telemetry }) {
                         {/* Auto/Manual Mode Switch Button */}
                         <button
                             onClick={handleToggleBurnersMode}
+                            disabled={isViewer}
                             className={`px-4 py-2 rounded-xl text-xs font-bold transition flex items-center gap-2 border ${
-                                burnersAutoMode
+                                isViewer ? 'opacity-50 cursor-not-allowed bg-slate-900 border-slate-700 text-slate-400' :
+                                (burnersAutoMode
                                 ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/50 shadow-lg shadow-emerald-500/20'
-                                : 'bg-amber-500/20 text-amber-300 border-amber-500/50'
+                                : 'bg-amber-500/20 text-amber-300 border-amber-500/50')
                             }`}
                         >
                             <i className={`fa-solid ${burnersAutoMode ? 'fa-microchip' : 'fa-hand'} text-sm`}></i>
@@ -974,13 +1332,19 @@ function EquipmentMonitoringPage({ telemetry }) {
                         <div className="flex items-center gap-1.5">
                             <button
                                 onClick={() => handleSetAllBurners('ON')}
-                                className="px-3 py-1.5 bg-slate-900 hover:bg-slate-800 text-slate-200 border border-slate-700 rounded-lg text-xs font-semibold"
+                                disabled={isViewer}
+                                className={`px-3 py-1.5 rounded-lg text-xs font-semibold ${
+                                    isViewer ? 'opacity-40 cursor-not-allowed bg-slate-900 text-slate-500 border border-slate-800' : 'bg-slate-900 hover:bg-slate-800 text-slate-200 border border-slate-700'
+                                }`}
                             >
                                 Ignite All (12)
                             </button>
                             <button
                                 onClick={() => handleSetAllBurners('OFF')}
-                                className="px-3 py-1.5 bg-slate-900 hover:bg-slate-800 text-rose-300 border border-slate-700 rounded-lg text-xs font-semibold"
+                                disabled={isViewer}
+                                className={`px-3 py-1.5 rounded-lg text-xs font-semibold ${
+                                    isViewer ? 'opacity-40 cursor-not-allowed bg-slate-900 text-slate-500 border border-slate-800' : 'bg-slate-900 hover:bg-slate-800 text-rose-300 border border-slate-700'
+                                }`}
                             >
                                 Extinguish All
                             </button>
@@ -1077,10 +1441,12 @@ function EquipmentMonitoringPage({ telemetry }) {
                                 <div className="mt-3">
                                     <button
                                         onClick={() => handleToggleBurner(b.id, b.status)}
+                                        disabled={isViewer}
                                         className={`w-full py-1.5 rounded-lg text-xs font-bold transition flex items-center justify-center gap-1.5 ${
-                                            isOn 
+                                            isViewer ? 'opacity-40 cursor-not-allowed bg-slate-800 text-slate-500 border border-slate-700' :
+                                            (isOn 
                                             ? 'bg-rose-500/20 hover:bg-rose-500 text-rose-300 hover:text-white border border-rose-500/40' 
-                                            : 'bg-emerald-500/20 hover:bg-emerald-500 text-emerald-300 hover:text-white border border-emerald-500/40'
+                                            : 'bg-emerald-500/20 hover:bg-emerald-500 text-emerald-300 hover:text-white border border-emerald-500/40')
                                         }`}
                                     >
                                         <i className={`fa-solid ${isOn ? 'fa-power-off' : 'fa-play'} text-[10px]`}></i>
@@ -1138,10 +1504,12 @@ function EquipmentMonitoringPage({ telemetry }) {
                                             {/* Auto / Manual Mode Pill */}
                                             <button
                                                 onClick={() => handleEquipmentAction(eq.equipment_id, eq.status, eq.mode, 'mode')}
+                                                disabled={isViewer}
                                                 className={`px-2 py-0.5 rounded text-[10px] font-bold border transition ${
-                                                    isAuto 
+                                                    isViewer ? 'opacity-40 cursor-not-allowed bg-slate-950 text-slate-500 border-slate-800' :
+                                                    (isAuto 
                                                     ? 'bg-sky-500/20 text-sky-300 border-sky-500/40' 
-                                                    : 'bg-amber-500/20 text-amber-300 border-amber-500/40'
+                                                    : 'bg-amber-500/20 text-amber-300 border-amber-500/40')
                                                 }`}
                                             >
                                                 {isAuto ? 'AUTO' : 'MANUAL'}
@@ -1190,10 +1558,12 @@ function EquipmentMonitoringPage({ telemetry }) {
                                     {/* Machine ON/OFF Toggle Button */}
                                     <button
                                         onClick={() => handleEquipmentAction(eq.equipment_id, eq.status, eq.mode, 'status')}
+                                        disabled={isViewer}
                                         className={`px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 ${
-                                            isRunning 
+                                            isViewer ? 'opacity-40 cursor-not-allowed bg-slate-800 text-slate-500 border border-slate-700' :
+                                            (isRunning 
                                             ? 'bg-rose-500/20 hover:bg-rose-500 text-rose-300 hover:text-white border border-rose-500/40' 
-                                            : 'bg-emerald-500/20 hover:bg-emerald-500 text-emerald-300 hover:text-white border border-emerald-500/40'
+                                            : 'bg-emerald-500/20 hover:bg-emerald-500 text-emerald-300 hover:text-white border border-emerald-500/40')
                                         }`}
                                     >
                                         <i className={`fa-solid ${isRunning ? 'fa-stop' : 'fa-play'} text-[10px]`}></i>
@@ -1212,7 +1582,8 @@ function EquipmentMonitoringPage({ telemetry }) {
 // ==============================================================================
 // PAGE 5: ALERTS & ANOMALIES PAGE
 // ==============================================================================
-function AlertsPage() {
+function AlertsPage({ userRole, userToken }) {
+    const isViewer = userRole === 'Viewer';
     const [alerts, setAlerts] = useState([]);
     const [filterSeverity, setFilterSeverity] = useState('ALL');
 
@@ -1227,16 +1598,26 @@ function AlertsPage() {
     }, []);
 
     const handleAcknowledge = async (id) => {
+        if (isViewer) return;
         await fetch('/api/alerts/acknowledge', {
             method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': userToken ? `Bearer ${userToken}` : ''
+            },
             body: JSON.stringify({ alert_id: id })
         });
         loadAlerts();
     };
 
     const handleResolve = async (id) => {
+        if (isViewer) return;
         await fetch('/api/alerts/resolve', {
             method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': userToken ? `Bearer ${userToken}` : ''
+            },
             body: JSON.stringify({ alert_id: id })
         });
         loadAlerts();
@@ -1246,6 +1627,17 @@ function AlertsPage() {
 
     return (
         <div className="space-y-6">
+            {/* Viewer Notice Banner */}
+            {isViewer && (
+                <div className="p-4 rounded-xl bg-amber-500/10 border border-amber-500/40 text-amber-300 text-xs flex items-center gap-3">
+                    <i className="fa-solid fa-lock text-base text-amber-400"></i>
+                    <div>
+                        <strong className="block font-bold uppercase tracking-wider">VIEWER RESTRICTION &bull; READ-ONLY INCIDENT CONSOLE</strong>
+                        <span>Incident acknowledgement and resolution are restricted to Operators and Admins. Viewers can monitor active limit breaches and anomaly logs.</span>
+                    </div>
+                </div>
+            )}
+
             <div className="scada-card p-6">
                 <div className="flex flex-col md:flex-row md:items-center justify-between pb-4 mb-4 border-b border-slate-800 gap-4">
                     <div>
@@ -1318,14 +1710,26 @@ function AlertsPage() {
                                                     {a.status === 'ACTIVE' && (
                                                         <button 
                                                             onClick={() => handleAcknowledge(a.id)}
-                                                            className="px-2 py-1 rounded bg-amber-500/20 hover:bg-amber-500 text-amber-300 hover:text-white text-[10px] font-bold border border-amber-500/30 transition"
+                                                            disabled={isViewer}
+                                                            title={isViewer ? 'Requires Operator or Admin clearance' : 'Acknowledge incident'}
+                                                            className={`px-2 py-1 rounded text-[10px] font-bold border transition ${
+                                                                isViewer 
+                                                                ? 'opacity-40 cursor-not-allowed bg-slate-800 text-slate-500 border-slate-700' 
+                                                                : 'bg-amber-500/20 hover:bg-amber-500 text-amber-300 hover:text-white border-amber-500/30'
+                                                            }`}
                                                         >
                                                             Ack
                                                         </button>
                                                     )}
                                                     <button 
                                                         onClick={() => handleResolve(a.id)}
-                                                        className="px-2 py-1 rounded bg-emerald-500/20 hover:bg-emerald-500 text-emerald-300 hover:text-white text-[10px] font-bold border border-emerald-500/30 transition"
+                                                        disabled={isViewer}
+                                                        title={isViewer ? 'Requires Operator or Admin clearance' : 'Mark incident resolved'}
+                                                        className={`px-2 py-1 rounded text-[10px] font-bold border transition ${
+                                                            isViewer 
+                                                            ? 'opacity-40 cursor-not-allowed bg-slate-800 text-slate-500 border-slate-700' 
+                                                            : 'bg-emerald-500/20 hover:bg-emerald-500 text-emerald-300 hover:text-white border-emerald-500/30'
+                                                        }`}
                                                     >
                                                         Resolve
                                                     </button>
@@ -1339,6 +1743,566 @@ function AlertsPage() {
                     </table>
                 </div>
             </div>
+        </div>
+    );
+}
+
+// ==============================================================================
+// COMPONENT: ADMIN EMPLOYEE MANAGEMENT PAGE (EXCEL INTEGRATED)
+// ==============================================================================
+function EmployeeManagementPage({ userToken, currentUser }) {
+    const [employees, setEmployees] = useState([]);
+    const [isLoading, setIsLoading] = useState(true);
+    const [searchQuery, setSearchQuery] = useState('');
+    const [filterRole, setFilterRole] = useState('ALL');
+    const [filterStatus, setFilterStatus] = useState('ALL');
+    const [statusMsg, setStatusMsg] = useState('');
+
+    // Modal state
+    const [isModalOpen, setIsModalOpen] = useState(false);
+    const [isEditing, setIsEditing] = useState(false);
+    const [formData, setFormData] = useState({
+        employee_id: '',
+        name: '',
+        role: 'Operator',
+        status: 'Active',
+        password: ''
+    });
+    const [formError, setFormError] = useState('');
+    const [isSaving, setIsSaving] = useState(false);
+
+    // Fetch employees list from backend
+    const loadEmployees = async () => {
+        setIsLoading(true);
+        try {
+            const res = await fetch('/api/auth/employees', {
+                headers: { 'Authorization': `Bearer ${userToken}` }
+            });
+            if (res.ok) {
+                const data = await res.json();
+                setEmployees(data.employees || []);
+            } else {
+                setStatusMsg('Failed to load employee records from server.');
+            }
+        } catch (e) {
+            setStatusMsg('Network error while fetching employee directory.');
+        } finally {
+            setIsLoading(false);
+        }
+    };
+
+    useEffect(() => {
+        loadEmployees();
+    }, []);
+
+    // Open Add Modal
+    const handleOpenAdd = () => {
+        setFormData({
+            employee_id: '',
+            name: '',
+            role: 'Operator',
+            status: 'Active',
+            password: ''
+        });
+        setFormError('');
+        setIsEditing(false);
+        setIsModalOpen(true);
+    };
+
+    // Open Edit Modal
+    const handleOpenEdit = (emp) => {
+        setFormData({
+            employee_id: emp.employee_id,
+            name: emp.name,
+            role: emp.role,
+            status: emp.status,
+            password: '' // Leave blank to retain existing
+        });
+        setFormError('');
+        setIsEditing(true);
+        setIsModalOpen(true);
+    };
+
+    // Toggle Active / Inactive status directly
+    const handleToggleStatus = async (emp) => {
+        const newStatus = emp.status === 'Active' ? 'Inactive' : 'Active';
+        try {
+            const res = await fetch('/api/auth/employees', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${userToken}`
+                },
+                body: JSON.stringify({
+                    employee_id: emp.employee_id,
+                    name: emp.name,
+                    role: emp.role,
+                    status: newStatus
+                })
+            });
+
+            if (res.ok) {
+                setStatusMsg(`Status of ${emp.employee_id} (${emp.name}) changed to ${newStatus}. Excel synchronized.`);
+                setTimeout(() => setStatusMsg(''), 3500);
+                loadEmployees();
+            } else {
+                const err = await res.json();
+                setStatusMsg(`Error: ${err.error || 'Failed to update employee'}`);
+            }
+        } catch (e) {
+            setStatusMsg('Error communicating with server.');
+        }
+    };
+
+    // Save Employee (Add or Update)
+    const handleSaveEmployee = async (e) => {
+        e.preventDefault();
+        setFormError('');
+
+        if (!formData.employee_id.trim() || !formData.name.trim()) {
+            setFormError('Employee ID and Employee Name are required.');
+            return;
+        }
+
+        if (!isEditing && !formData.password.trim()) {
+            setFormError('A password is required for newly registered employees.');
+            return;
+        }
+
+        setIsSaving(true);
+        try {
+            const payload = {
+                employee_id: formData.employee_id.trim().toUpperCase(),
+                name: formData.name.trim(),
+                role: formData.role,
+                status: formData.status
+            };
+            if (formData.password.trim()) {
+                payload.password = formData.password.trim();
+            }
+
+            const res = await fetch('/api/auth/employees', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${userToken}`
+                },
+                body: JSON.stringify(payload)
+            });
+
+            const data = await res.json();
+            if (res.ok && data.success) {
+                setIsModalOpen(false);
+                setStatusMsg(`Success: ${payload.employee_id} saved and synced with employees.xlsx.`);
+                setTimeout(() => setStatusMsg(''), 3500);
+                loadEmployees();
+            } else {
+                setFormError(data.error || 'Failed to save employee record.');
+            }
+        } catch (err) {
+            setFormError('Server error while saving employee.');
+        } finally {
+            setIsSaving(false);
+        }
+    };
+
+    // Filter employees
+    const filteredEmployees = employees.filter(emp => {
+        const matchesSearch = 
+            emp.employee_id.toLowerCase().includes(searchQuery.toLowerCase()) ||
+            emp.name.toLowerCase().includes(searchQuery.toLowerCase());
+        const matchesRole = filterRole === 'ALL' || emp.role === filterRole;
+        const matchesStatus = filterStatus === 'ALL' || emp.status === filterStatus;
+        return matchesSearch && matchesRole && matchesStatus;
+    });
+
+    // Summary counts
+    const totalCount = employees.length;
+    const adminCount = employees.filter(e => e.role === 'Admin' && e.status === 'Active').length;
+    const operatorCount = employees.filter(e => e.role === 'Operator' && e.status === 'Active').length;
+    const viewerCount = employees.filter(e => e.role === 'Viewer' && e.status === 'Active').length;
+    const inactiveCount = employees.filter(e => e.status === 'Inactive').length;
+
+    return (
+        <div className="space-y-6">
+            {/* Page Header */}
+            <div className="flex flex-col md:flex-row md:items-center justify-between pb-4 border-b border-slate-800 gap-4">
+                <div>
+                    <div className="flex items-center gap-2">
+                        <span className="text-xs font-bold uppercase tracking-wider text-rose-400 bg-rose-950 px-3 py-1 rounded-full border border-rose-800">
+                            Supervisory Administration
+                        </span>
+                        <span className="text-xs font-mono text-slate-400">Direct Excel Hot-Reload</span>
+                    </div>
+                    <h2 className="text-2xl font-black text-white mt-1.5 flex items-center gap-2.5">
+                        <i className="fa-solid fa-users-gear text-rose-500"></i>
+                        Workforce Access & Employee Directory
+                    </h2>
+                    <p className="text-xs text-slate-400 mt-1">
+                        Securely manage employee credentials, roles, and status synchronized with <code className="text-sky-400 font-mono">employees.xlsx</code>.
+                    </p>
+                </div>
+
+                {/* Top Action Buttons */}
+                <div className="flex flex-wrap items-center gap-2.5">
+                    <button
+                        onClick={handleOpenAdd}
+                        className="px-4 py-2 rounded-xl bg-gradient-to-r from-sky-500 to-blue-600 hover:from-sky-400 hover:to-blue-500 text-white font-bold text-xs shadow-lg shadow-sky-500/20 flex items-center gap-2 transition"
+                    >
+                        <i className="fa-solid fa-user-plus"></i>
+                        <span>Register Employee</span>
+                    </button>
+                    <a
+                        href={`/api/auth/employees/download?token=${userToken}`}
+                        download="employees.xlsx"
+                        className="px-3.5 py-2 rounded-xl bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border border-emerald-500/40 font-semibold text-xs flex items-center gap-2 transition"
+                    >
+                        <i className="fa-solid fa-file-excel text-emerald-400"></i>
+                        <span>Export Excel</span>
+                    </a>
+                    <button
+                        onClick={loadEmployees}
+                        title="Reload directory from Excel"
+                        className="px-3 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-slate-300 border border-slate-700 text-xs transition"
+                    >
+                        <i className="fa-solid fa-rotate"></i>
+                    </button>
+                </div>
+            </div>
+
+            {/* Notification Toast */}
+            {statusMsg && (
+                <div className="p-3.5 rounded-xl bg-sky-950/80 border border-sky-500 text-sky-200 text-xs font-mono flex items-center gap-2.5">
+                    <i className="fa-solid fa-circle-info text-sky-400"></i>
+                    <span>{statusMsg}</span>
+                </div>
+            )}
+
+            {/* KPI Metric Cards */}
+            <div className="grid grid-cols-2 md:grid-cols-5 gap-3.5">
+                <div className="p-4 rounded-xl bg-slate-900/90 border border-slate-800">
+                    <div className="text-[10px] text-slate-400 uppercase font-bold tracking-wider">Total Records</div>
+                    <div className="text-2xl font-black text-white mt-1 font-mono">{totalCount}</div>
+                    <div className="text-[10px] text-slate-500 mt-0.5">In employees.xlsx</div>
+                </div>
+                <div className="p-4 rounded-xl bg-slate-900/90 border border-slate-800">
+                    <div className="text-[10px] text-rose-400 uppercase font-bold tracking-wider">Active Admins</div>
+                    <div className="text-2xl font-black text-rose-400 mt-1 font-mono">{adminCount}</div>
+                    <div className="text-[10px] text-slate-500 mt-0.5">Full System Access</div>
+                </div>
+                <div className="p-4 rounded-xl bg-slate-900/90 border border-slate-800">
+                    <div className="text-[10px] text-sky-400 uppercase font-bold tracking-wider">Active Operators</div>
+                    <div className="text-2xl font-black text-sky-400 mt-1 font-mono">{operatorCount}</div>
+                    <div className="text-[10px] text-slate-500 mt-0.5">Machinery & Burners</div>
+                </div>
+                <div className="p-4 rounded-xl bg-slate-900/90 border border-slate-800">
+                    <div className="text-[10px] text-amber-400 uppercase font-bold tracking-wider">Active Viewers</div>
+                    <div className="text-2xl font-black text-amber-400 mt-1 font-mono">{viewerCount}</div>
+                    <div className="text-[10px] text-slate-500 mt-0.5">Read-Only Telemetry</div>
+                </div>
+                <div className="p-4 rounded-xl bg-slate-900/90 border border-slate-800">
+                    <div className="text-[10px] text-slate-400 uppercase font-bold tracking-wider">Deactivated</div>
+                    <div className="text-2xl font-black text-slate-400 mt-1 font-mono">{inactiveCount}</div>
+                    <div className="text-[10px] text-slate-500 mt-0.5">Access Denied</div>
+                </div>
+            </div>
+
+            {/* Excel Live Reload Notice Card */}
+            <div className="p-4 rounded-xl bg-slate-900/60 border border-slate-800 flex items-start gap-3 text-xs text-slate-300">
+                <i className="fa-solid fa-cloud-arrow-down text-sky-400 text-base mt-0.5 shrink-0"></i>
+                <div className="leading-relaxed">
+                    <strong className="text-sky-300 uppercase font-bold">AUTOMATIC EXCEL RE-READ ENABLED:</strong> You can edit <code className="text-white font-mono bg-slate-950 px-1.5 py-0.5 rounded border border-slate-800">employees.xlsx</code> directly on disk using Microsoft Excel, LibreOffice, or online sheets. Whenever the file is saved, the power plant security daemon automatically detects the updated file timestamp and reloads records without restarting the web service!
+                </div>
+            </div>
+
+            {/* Filter & Search Bar */}
+            <div className="scada-card p-6 space-y-4">
+                <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
+                    {/* Search Field */}
+                    <div className="relative flex-1 max-w-md">
+                        <i className="fa-solid fa-magnifying-glass absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-500 text-xs"></i>
+                        <input
+                            type="text"
+                            value={searchQuery}
+                            onChange={(e) => setSearchQuery(e.target.value)}
+                            placeholder="Filter by ID (e.g. EMP-1001) or Name..."
+                            className="w-full bg-slate-950 border border-slate-800 focus:border-sky-500 rounded-xl pl-9 pr-3.5 py-2 text-xs text-white placeholder-slate-500 outline-none transition font-mono"
+                        />
+                    </div>
+
+                    {/* Role & Status Filter Badges */}
+                    <div className="flex flex-wrap items-center gap-2">
+                        <span className="text-[11px] text-slate-500 font-semibold uppercase">Role:</span>
+                        {['ALL', 'Admin', 'Operator', 'Viewer'].map(r => (
+                            <button
+                                key={r}
+                                onClick={() => setFilterRole(r)}
+                                className={`px-2.5 py-1 rounded-lg text-xs font-semibold transition ${
+                                    filterRole === r ? 'bg-sky-500 text-white' : 'bg-slate-950 text-slate-400 border border-slate-800'
+                                }`}
+                            >
+                                {r}
+                            </button>
+                        ))}
+
+                        <span className="text-[11px] text-slate-500 font-semibold uppercase ml-2">Status:</span>
+                        {['ALL', 'Active', 'Inactive'].map(s => (
+                            <button
+                                key={s}
+                                onClick={() => setFilterStatus(s)}
+                                className={`px-2.5 py-1 rounded-lg text-xs font-semibold transition ${
+                                    filterStatus === s ? 'bg-sky-500 text-white' : 'bg-slate-950 text-slate-400 border border-slate-800'
+                                }`}
+                            >
+                                {s}
+                            </button>
+                        ))}
+                    </div>
+                </div>
+
+                {/* Employees Table */}
+                <div className="overflow-x-auto">
+                    <table className="w-full text-left scada-table">
+                        <thead>
+                            <tr>
+                                <th>Employee ID</th>
+                                <th>Full Name</th>
+                                <th>Role</th>
+                                <th>Account Status</th>
+                                <th>Password Security</th>
+                                <th className="text-right">Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {isLoading ? (
+                                <tr>
+                                    <td colSpan="6" className="text-center py-8 text-slate-400">
+                                        <i className="fa-solid fa-circle-notch fa-spin mr-2"></i>
+                                        Loading directory from employees.xlsx...
+                                    </td>
+                                </tr>
+                            ) : filteredEmployees.length === 0 ? (
+                                <tr>
+                                    <td colSpan="6" className="text-center py-8 text-slate-500">
+                                        No employee records matched the filter criteria.
+                                    </td>
+                                </tr>
+                            ) : (
+                                filteredEmployees.map(emp => {
+                                    const isAdmin = emp.role === 'Admin';
+                                    const isOperator = emp.role === 'Operator';
+                                    const isActive = emp.status === 'Active';
+
+                                    return (
+                                        <tr key={emp.employee_id}>
+                                            <td className="font-mono font-bold text-white text-xs">
+                                                {emp.employee_id}
+                                            </td>
+                                            <td className="font-semibold text-slate-200">
+                                                {emp.name}
+                                                {emp.employee_id === currentUser.employee_id && (
+                                                    <span className="ml-2 text-[10px] text-sky-400 font-mono">(You)</span>
+                                                )}
+                                            </td>
+                                            <td>
+                                                <span className={`px-2 py-0.5 rounded text-[10px] font-bold border ${
+                                                    isAdmin ? 'bg-rose-500/15 text-rose-300 border-rose-500/40' :
+                                                    isOperator ? 'bg-sky-500/15 text-sky-300 border-sky-500/40' :
+                                                    'bg-amber-500/15 text-amber-300 border-amber-500/40'
+                                                }`}>
+                                                    {emp.role}
+                                                </span>
+                                            </td>
+                                            <td>
+                                                <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase inline-flex items-center gap-1.5 ${
+                                                    isActive 
+                                                    ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40' 
+                                                    : 'bg-rose-500/20 text-rose-300 border border-rose-500/40'
+                                                }`}>
+                                                    <span className={`w-1.5 h-1.5 rounded-full ${isActive ? 'bg-emerald-400' : 'bg-rose-500'}`}></span>
+                                                    {emp.status}
+                                                </span>
+                                            </td>
+                                            <td className="text-xs font-mono text-slate-400">
+                                                <span className="inline-flex items-center gap-1.5 text-slate-400" title="Password securely hashed in Excel">
+                                                    <i className="fa-solid fa-lock text-[10px] text-emerald-400"></i>
+                                                    <span>PBKDF2 Hashed</span>
+                                                </span>
+                                            </td>
+                                            <td className="text-right">
+                                                <div className="flex items-center justify-end gap-2">
+                                                    {/* Toggle Status Button */}
+                                                    <button
+                                                        onClick={() => handleToggleStatus(emp)}
+                                                        title={isActive ? 'Deactivate Employee' : 'Activate Employee'}
+                                                        className={`px-2.5 py-1 rounded-lg text-[10px] font-bold border transition ${
+                                                            isActive
+                                                            ? 'bg-rose-500/15 hover:bg-rose-500 text-rose-300 hover:text-white border-rose-500/30'
+                                                            : 'bg-emerald-500/15 hover:bg-emerald-500 text-emerald-300 hover:text-white border-emerald-500/30'
+                                                        }`}
+                                                    >
+                                                        {isActive ? 'Deactivate' : 'Activate'}
+                                                    </button>
+
+                                                    {/* Edit Button */}
+                                                    <button
+                                                        onClick={() => handleOpenEdit(emp)}
+                                                        title="Edit details"
+                                                        className="px-2.5 py-1 rounded-lg bg-slate-900 hover:bg-slate-800 text-slate-300 hover:text-white border border-slate-700 text-[10px] font-bold transition"
+                                                    >
+                                                        <i className="fa-solid fa-pen-to-square mr-1"></i>Edit
+                                                    </button>
+                                                </div>
+                                            </td>
+                                        </tr>
+                                    );
+                                })
+                            )}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            {/* Modal: Add / Edit Employee */}
+            {isModalOpen && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm animate-fade-in">
+                    <div className="scada-card w-full max-w-lg p-6 border border-slate-800 shadow-2xl bg-slate-900">
+                        <div className="flex items-center justify-between pb-4 border-b border-slate-800">
+                            <div>
+                                <h3 className="text-base font-bold text-white flex items-center gap-2">
+                                    <i className={`fa-solid ${isEditing ? 'fa-user-pen text-sky-400' : 'fa-user-plus text-emerald-400'}`}></i>
+                                    <span>{isEditing ? 'Modify Employee Credentials' : 'Register Authorized Employee'}</span>
+                                </h3>
+                                <p className="text-[11px] text-slate-400">Writes directly to <code className="text-sky-400 font-mono">employees.xlsx</code></p>
+                            </div>
+                            <button
+                                onClick={() => setIsModalOpen(false)}
+                                className="w-8 h-8 rounded-lg bg-slate-950 hover:bg-slate-800 text-slate-400 hover:text-white flex items-center justify-center text-xs"
+                            >
+                                <i className="fa-solid fa-xmark"></i>
+                            </button>
+                        </div>
+
+                        {formError && (
+                            <div className="mt-4 p-3 rounded-xl bg-rose-950/60 border border-rose-500/50 text-rose-300 text-xs flex items-center gap-2">
+                                <i className="fa-solid fa-triangle-exclamation text-rose-400"></i>
+                                <span>{formError}</span>
+                            </div>
+                        )}
+
+                        <form onSubmit={handleSaveEmployee} className="mt-4 space-y-4 text-xs">
+                            <div>
+                                <label className="block text-slate-300 font-bold uppercase tracking-wider mb-1">
+                                    Employee ID
+                                </label>
+                                <input
+                                    type="text"
+                                    value={formData.employee_id}
+                                    onChange={(e) => setFormData({ ...formData, employee_id: e.target.value.toUpperCase() })}
+                                    disabled={isEditing}
+                                    placeholder="e.g. EMP-5005"
+                                    required
+                                    className={`w-full bg-slate-950 border border-slate-700 focus:border-sky-500 rounded-xl px-3.5 py-2.5 text-xs text-white placeholder-slate-500 outline-none font-mono ${
+                                        isEditing ? 'opacity-60 cursor-not-allowed' : ''
+                                    }`}
+                                />
+                                {isEditing && (
+                                    <span className="text-[10px] text-slate-500 mt-0.5 block">Employee ID is immutable once registered.</span>
+                                )}
+                            </div>
+
+                            <div>
+                                <label className="block text-slate-300 font-bold uppercase tracking-wider mb-1">
+                                    Employee Full Name
+                                </label>
+                                <input
+                                    type="text"
+                                    value={formData.name}
+                                    onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+                                    placeholder="e.g. Dr. Ramesh Kumar"
+                                    required
+                                    className="w-full bg-slate-950 border border-slate-700 focus:border-sky-500 rounded-xl px-3.5 py-2.5 text-xs text-white placeholder-slate-500 outline-none"
+                                />
+                            </div>
+
+                            <div className="grid grid-cols-2 gap-3">
+                                <div>
+                                    <label className="block text-slate-300 font-bold uppercase tracking-wider mb-1">
+                                        Assigned Role
+                                    </label>
+                                    <select
+                                        value={formData.role}
+                                        onChange={(e) => setFormData({ ...formData, role: e.target.value })}
+                                        className="w-full bg-slate-950 border border-slate-700 focus:border-sky-500 rounded-xl px-3.5 py-2.5 text-xs text-white outline-none"
+                                    >
+                                        <option value="Admin">Admin (Full Control + Staff)</option>
+                                        <option value="Operator">Operator (Plant & Actuators)</option>
+                                        <option value="Viewer">Viewer (Read-Only Telemetry)</option>
+                                    </select>
+                                </div>
+
+                                <div>
+                                    <label className="block text-slate-300 font-bold uppercase tracking-wider mb-1">
+                                        Account Status
+                                    </label>
+                                    <select
+                                        value={formData.status}
+                                        onChange={(e) => setFormData({ ...formData, status: e.target.value })}
+                                        className="w-full bg-slate-950 border border-slate-700 focus:border-sky-500 rounded-xl px-3.5 py-2.5 text-xs text-white outline-none"
+                                    >
+                                        <option value="Active">Active (Permit Access)</option>
+                                        <option value="Inactive">Inactive (Access Denied)</option>
+                                    </select>
+                                </div>
+                            </div>
+
+                            <div>
+                                <label className="block text-slate-300 font-bold uppercase tracking-wider mb-1">
+                                    Password {isEditing ? '(Leave blank to retain current)' : '(Required)'}
+                                </label>
+                                <input
+                                    type="password"
+                                    value={formData.password}
+                                    onChange={(e) => setFormData({ ...formData, password: e.target.value })}
+                                    placeholder={isEditing ? '•••••••• (unchanged)' : 'Enter initial secure password'}
+                                    required={!isEditing}
+                                    className="w-full bg-slate-950 border border-slate-700 focus:border-sky-500 rounded-xl px-3.5 py-2.5 text-xs text-white placeholder-slate-500 outline-none font-mono"
+                                />
+                                <span className="text-[10px] text-slate-500 mt-0.5 block">
+                                    Passwords are automatically hashed with PBKDF2 SHA-256 before being written to Excel.
+                                </span>
+                            </div>
+
+                            <div className="pt-4 border-t border-slate-800 flex items-center justify-end gap-2.5">
+                                <button
+                                    type="button"
+                                    onClick={() => setIsModalOpen(false)}
+                                    className="px-4 py-2 rounded-xl bg-slate-950 hover:bg-slate-800 text-slate-300 border border-slate-700 font-semibold"
+                                >
+                                    Cancel
+                                </button>
+                                <button
+                                    type="submit"
+                                    disabled={isSaving}
+                                    className="px-5 py-2 rounded-xl bg-sky-500 hover:bg-sky-400 text-white font-bold shadow-lg shadow-sky-500/20 flex items-center gap-2 disabled:opacity-50"
+                                >
+                                    {isSaving ? (
+                                        <>
+                                            <i className="fa-solid fa-circle-notch fa-spin"></i>
+                                            <span>Writing to Excel...</span>
+                                        </>
+                                    ) : (
+                                        <>
+                                            <i className="fa-solid fa-floppy-disk"></i>
+                                            <span>Save & Update Excel</span>
+                                        </>
+                                    )}
+                                </button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+            )}
         </div>
     );
 }

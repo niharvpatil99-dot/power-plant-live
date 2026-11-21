@@ -9,9 +9,12 @@ import threading
 import time
 
 # Ensure backend directory is in sys.path regardless of execution directory (e.g. gunicorn)
-BACKEND_DIR = os.path.dirname(os.path.abspath(__file__))
-if BACKEND_DIR not in sys.path:
-    sys.path.insert(0, BACKEND_DIR)
+CURR_DIR = os.path.dirname(os.path.abspath(__file__))
+backend_subdir = os.path.join(CURR_DIR, "backend")
+if os.path.exists(backend_subdir) and backend_subdir not in sys.path:
+    sys.path.insert(0, backend_subdir)
+if CURR_DIR not in sys.path:
+    sys.path.insert(0, CURR_DIR)
 
 from flask import Flask, jsonify, request, send_from_directory
 from flask_socketio import SocketIO, emit
@@ -23,6 +26,10 @@ from database import (
 )
 from simulator import simulator
 from mqtt_gateway import mqtt_gateway
+from auth import (
+    authenticate_employee, get_session, destroy_session,
+    get_all_employees_sanitized, save_or_update_employee, EXCEL_PATH
+)
 
 # Setup Flask & SocketIO
 # Detect FRONTEND_DIR dynamically (supports nested backend/frontend or flat root deployment)
@@ -108,6 +115,118 @@ def serve_static(path):
     if os.path.exists(os.path.join(FRONTEND_DIR, path)):
         return send_from_directory(FRONTEND_DIR, path)
     return send_from_directory(os.path.dirname(__file__), path)
+
+# --- AUTHENTICATION & ACCESS CONTROL HELPERS ---
+def get_current_user():
+    """Extracts and verifies session token from Authorization header or query parameter"""
+    auth_header = request.headers.get("Authorization", "")
+    token = None
+    if auth_header.startswith("Bearer "):
+        token = auth_header[7:].strip()
+    elif "token" in request.args:
+        token = request.args.get("token")
+    elif request.is_json:
+        data = request.get_json(silent=True, force=False) or {}
+        if isinstance(data, dict):
+            token = data.get("token")
+    return get_session(token)
+
+def check_permission(allowed_roles=None):
+    """Verifies that the request comes from an authenticated user with permitted role"""
+    user = get_current_user()
+    if not user:
+        # For seamless backward compatibility / monitoring, if no token header, allow default viewer access
+        return None
+    if allowed_roles and user.get("role") not in allowed_roles:
+        return False
+    return user
+
+# --- AUTHENTICATION API ENDPOINTS ---
+
+@app.route("/api/auth/login", methods=["POST"])
+def auth_login():
+    """Authenticates employee credentials against employees.xlsx"""
+    data = request.get_json(force=True) or {}
+    emp_id = data.get("employee_id")
+    password = data.get("password")
+    success, result = authenticate_employee(emp_id, password)
+    if success:
+        user_data = {
+            "token": result["token"],
+            "employee_id": result["employee_id"],
+            "name": result["name"],
+            "role": result["role"],
+            "status": result["status"]
+        }
+        return jsonify({
+            "success": True,
+            "token": result["token"],
+            "user": user_data,
+            "employee": user_data
+        })
+    status_code = 403 if ("inactive" in str(result).lower() or "deactivated" in str(result).lower()) else 401
+    return jsonify({"success": False, "error": result}), status_code
+
+@app.route("/api/auth/me", methods=["GET"])
+def auth_me():
+    """Returns current active session or 401"""
+    user = get_current_user()
+    if user:
+        return jsonify({
+            "authenticated": True,
+            "employee": {
+                "employee_id": user["employee_id"],
+                "name": user["name"],
+                "role": user["role"],
+                "status": user["status"]
+            }
+        })
+    return jsonify({"authenticated": False}), 401
+
+@app.route("/api/auth/logout", methods=["POST"])
+def auth_logout():
+    """Destroys current session token"""
+    data = request.get_json(silent=True) or {}
+    token = data.get("token") or request.headers.get("Authorization", "")[7:].strip()
+    destroy_session(token)
+    return jsonify({"success": True, "message": "Signed out successfully."})
+
+@app.route("/api/auth/employees", methods=["GET"])
+def list_employees():
+    """Admin-only: lists all employees registered in employees.xlsx"""
+    user = get_current_user()
+    if not user or user.get("role") != "Admin":
+        return jsonify({"error": "Access Denied: Administrator role required to view Employee Directory."}), 403
+    return jsonify({
+        "employees": get_all_employees_sanitized(),
+        "excel_file": os.path.basename(EXCEL_PATH)
+    })
+
+@app.route("/api/auth/employees", methods=["POST"])
+def manage_employee():
+    """Admin-only: adds or updates an employee in employees.xlsx"""
+    user = get_current_user()
+    if not user or user.get("role") != "Admin":
+        return jsonify({"error": "Access Denied: Administrator role required to update employee records."}), 403
+    data = request.get_json(force=True) or {}
+    emp_id = data.get("employee_id")
+    name = data.get("name")
+    password = data.get("password")
+    role = data.get("role", "Operator")
+    status = data.get("status", "Active")
+    success, msg = save_or_update_employee(emp_id, name, password, role, status)
+    if success:
+        return jsonify({"success": True, "message": msg})
+    return jsonify({"success": False, "error": msg}), 400
+
+@app.route("/api/auth/employees/download", methods=["GET"])
+def download_excel():
+    """Admin-only: download live employees.xlsx spreadsheet"""
+    user = get_current_user()
+    if not user or user.get("role") != "Admin":
+        return jsonify({"error": "Access Denied: Administrator role required to download Employee Directory."}), 403
+    from flask import send_file
+    return send_file(EXCEL_PATH, as_attachment=True, download_name="employees.xlsx")
 
 # --- REST APIS ---
 
@@ -204,6 +323,10 @@ def get_burners():
 
 @app.route("/api/burners/toggle", methods=["POST"])
 def toggle_burner():
+    user = get_current_user()
+    if user and user.get("role") == "Viewer":
+        return jsonify({"status": "FORBIDDEN", "message": "Access Denied: Viewer accounts have read-only monitoring permissions. Operator or Admin role required to modulate burners."}), 403
+
     data = request.get_json(force=True)
     b_id = data.get("burner_id")
     status = data.get("status", "ON")
@@ -214,6 +337,10 @@ def toggle_burner():
 
 @app.route("/api/burners/mode", methods=["POST"])
 def set_burner_mode():
+    user = get_current_user()
+    if user and user.get("role") == "Viewer":
+        return jsonify({"status": "FORBIDDEN", "message": "Access Denied: Viewer accounts have read-only monitoring permissions. Operator or Admin role required."}), 403
+
     data = request.get_json(force=True)
     is_auto = data.get("mode") == "AUTO" or data.get("is_auto") is True
     simulator.set_burners_auto_mode(is_auto)
@@ -221,6 +348,10 @@ def set_burner_mode():
 
 @app.route("/api/equipment/toggle", methods=["POST"])
 def toggle_equipment():
+    user = get_current_user()
+    if user and user.get("role") == "Viewer":
+        return jsonify({"status": "FORBIDDEN", "message": "Access Denied: Viewer accounts have read-only monitoring permissions. Operator or Admin role required to trip equipment."}), 403
+
     data = request.get_json(force=True)
     eq_id = data.get("equipment_id")
     status = data.get("status")
@@ -237,6 +368,10 @@ def get_alerts():
 
 @app.route("/api/alerts/acknowledge", methods=["POST"])
 def ack_alert():
+    user = get_current_user()
+    if user and user.get("role") == "Viewer":
+        return jsonify({"status": "FORBIDDEN", "message": "Access Denied: Viewer accounts have read-only access. Operator or Admin role required to acknowledge alarms."}), 403
+
     data = request.get_json(force=True)
     alert_id = data.get("alert_id")
     if alert_id:
@@ -246,6 +381,10 @@ def ack_alert():
 
 @app.route("/api/alerts/resolve", methods=["POST"])
 def res_alert():
+    user = get_current_user()
+    if user and user.get("role") == "Viewer":
+        return jsonify({"status": "FORBIDDEN", "message": "Access Denied: Viewer accounts have read-only access. Operator or Admin role required to resolve alarms."}), 403
+
     data = request.get_json(force=True)
     alert_id = data.get("alert_id")
     if alert_id:

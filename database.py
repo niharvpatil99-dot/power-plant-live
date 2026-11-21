@@ -8,10 +8,23 @@ import os
 import datetime
 import random
 
-DB_PATH = os.environ.get(
-    "DATABASE_PATH",
-    os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "database", "power_plant.db")
-)
+# Locate power_plant.db (supports flat root or nested database/ folder)
+def find_db_path():
+    env_p = os.environ.get("DATABASE_PATH")
+    if env_p:
+        return env_p
+    curr = os.path.dirname(os.path.abspath(__file__))
+    candidates = [
+        os.path.join(curr, "power_plant.db"),
+        os.path.join(curr, "database", "power_plant.db"),
+        os.path.join(os.path.dirname(curr), "database", "power_plant.db"),
+    ]
+    for c in candidates:
+        if os.path.exists(c):
+            return c
+    return candidates[0]
+
+DB_PATH = find_db_path()
 
 def get_db():
     conn = sqlite3.connect(DB_PATH, timeout=30.0)
